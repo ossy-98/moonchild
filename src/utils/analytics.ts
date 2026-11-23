@@ -1,14 +1,18 @@
 import { STREAMING_PLATFORMS } from '../config/links';
 
 const COUNTER_API_BASE = 'https://abacus.jasoncameron.dev';
-const NAMESPACE = 'ossy-moonchild-v1-prod';
-const UV_STORAGE_KEY = 'ossy_mc_uv_v1';
+// 전체/일/월/년 버킷 지원 프로덕션 네임스페이스 (깨끗하게 0부터 시작)
+const NAMESPACE = 'ossy-moonchild-v2-prod';
 
 // SHA-256("980115Kra!") — 소스코드에 평문 비밀번호가 노출되지 않도록 해시로만 검증
 const ADMIN_PASSPHRASE_SHA256 =
   'f64b55abfd89fbe4ddc8f2847607af5607c33329a425a4cfb192378d0e6263dc';
 
+export type AnalyticsPeriod = 'all' | 'day' | 'month' | 'year';
+
 export interface AnalyticsSnapshot {
+  period: AnalyticsPeriod;
+  periodKey: string;
   totalViews: number;
   uniqueVisitors: number;
   platformClicks: Record<string, number>;
@@ -16,6 +20,49 @@ export interface AnalyticsSnapshot {
   contactClicks: number;
   bookletModalClicks: number;
   fetchedAt: string;
+}
+
+/**
+ * 한국 표준시(KST, Asia/Seoul) 기준 현재 연/월/일 반환
+ */
+export function getKstDateParts(date: Date = new Date()): {
+  year: string;
+  month: string;
+  day: string;
+  ymd: string;
+  ym: string;
+} {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((p) => p.type === 'year')?.value ?? '2026';
+  const month = parts.find((p) => p.type === 'month')?.value ?? '01';
+  const day = parts.find((p) => p.type === 'day')?.value ?? '01';
+  return {
+    year,
+    month,
+    day,
+    ymd: `${year}-${month}-${day}`,
+    ym: `${year}-${month}`,
+  };
+}
+
+function getBucketPrefix(period: AnalyticsPeriod, periodKey: string): string {
+  switch (period) {
+    case 'day':
+      return `d_${periodKey}`;
+    case 'month':
+      return `m_${periodKey}`;
+    case 'year':
+      return `y_${periodKey}`;
+    case 'all':
+    default:
+      return 'all';
+  }
 }
 
 /**
@@ -29,7 +76,6 @@ async function sha256Hex(input: string): Promise<string> {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
   }
-  // WebCrypto 비활성 환경용 순수 JS SHA-256
   const K = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
     0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
@@ -47,7 +93,7 @@ async function sha256Hex(input: string): Promise<string> {
   const bytes = Array.from(new TextEncoder().encode(input));
   const bitLen = bytes.length * 8;
   bytes.push(0x80);
-  while ((bytes.length % 64) !== 56) bytes.push(0);
+  while (bytes.length % 64 !== 56) bytes.push(0);
   for (let i = 7; i >= 0; i--) bytes.push((bitLen / Math.pow(2, i * 8)) & 0xff);
 
   let [h0, h1, h2, h3, h4, h5, h6, h7] = [
@@ -103,7 +149,6 @@ async function sha256Hex(input: string): Promise<string> {
 
 /**
  * URL 쿼리스트링(?admin=비밀번호)이 아티스트 본인의 비밀번호와 일치하는지 확인
- * - 주소창 정리는 모달이 실제로 열린 뒤 호출하도록 분리하여 React StrictMode 이중 마운트와 충돌하지 않게 처리
  */
 export async function checkAdminUrlAccess(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
@@ -124,9 +169,6 @@ export function clearAdminQueryFromUrl(): void {
   }
 }
 
-/**
- * 카운터 1 증가 (새 탭으로 이동하는 링크 클릭 시에도 유실되지 않도록 keepalive 사용)
- */
 async function incrementKey(key: string): Promise<void> {
   try {
     await fetch(`${COUNTER_API_BASE}/hit/${NAMESPACE}/${key}`, {
@@ -135,13 +177,10 @@ async function incrementKey(key: string): Promise<void> {
       cache: 'no-store',
     });
   } catch {
-    // 네트워크 차단/애드블록 환경에서도 사용자 UX에 영향 없도록 무시
+    // 네트워크 차단 환경에서도 사용자 UX에 영향 없도록 무시
   }
 }
 
-/**
- * 카운터 현재 값 조회 (아직 생성되지 않은 키는 0 반환)
- */
 async function getKeyCount(key: string): Promise<number> {
   try {
     const res = await fetch(`${COUNTER_API_BASE}/get/${NAMESPACE}/${key}`, {
@@ -157,42 +196,73 @@ async function getKeyCount(key: string): Promise<number> {
 }
 
 /**
- * 일반 방문자 페이지 접속 시 조회수(Total Views) 및 순 방문자(Unique Visitors) 기록
+ * 전체(all) · 일별(d_YYYY-MM-DD) · 월별(m_YYYY-MM) · 년별(y_YYYY) 4개 버킷 동시 증가
+ */
+function incrementAllTimeBuckets(metricSuffix: string): Promise<void[]> {
+  const { year, ym, ymd } = getKstDateParts();
+  return Promise.all([
+    incrementKey(`all_${metricSuffix}`),
+    incrementKey(`d_${ymd}_${metricSuffix}`),
+    incrementKey(`m_${ym}_${metricSuffix}`),
+    incrementKey(`y_${year}_${metricSuffix}`),
+  ]);
+}
+
+/**
+ * 일반 방문자 페이지 접속 시 전체/일/월/년별 조회수 및 순 방문자 기록
  */
 export async function trackPageView(): Promise<void> {
-  await incrementKey('total_views');
+  const { year, ym, ymd } = getKstDateParts();
+
+  // 1) 총 조회수 (전체/일/월/년 동시 기록)
+  const tasks: Promise<unknown>[] = [incrementAllTimeBuckets('total_views')];
+
+  // 2) 순 방문자 수 (각 기간별 1회만 카운트)
+  const uvBuckets = [
+    { storageKey: 'ossy_mc_uv_v2_all', counterKey: 'all_unique_visitors' },
+    { storageKey: `ossy_mc_uv_v2_d_${ymd}`, counterKey: `d_${ymd}_unique_visitors` },
+    { storageKey: `ossy_mc_uv_v2_m_${ym}`, counterKey: `m_${ym}_unique_visitors` },
+    { storageKey: `ossy_mc_uv_v2_y_${year}`, counterKey: `y_${year}_unique_visitors` },
+  ];
 
   try {
-    const alreadyVisited = localStorage.getItem(UV_STORAGE_KEY);
-    if (!alreadyVisited) {
-      localStorage.setItem(UV_STORAGE_KEY, '1');
-      await incrementKey('unique_visitors');
+    for (const bucket of uvBuckets) {
+      if (!localStorage.getItem(bucket.storageKey)) {
+        localStorage.setItem(bucket.storageKey, '1');
+        tasks.push(incrementKey(bucket.counterKey));
+      }
     }
   } catch {
     // 시크릿 모드 등 localStorage 제한 시 무시
   }
+
+  await Promise.all(tasks);
 }
 
 /**
- * 각 북클릿(음원 스트리밍 플랫폼) 링크 클릭 기록
+ * 각 북클릿(음원 스트리밍 플랫폼) 링크 클릭 기록 (전체/일/월/년 동시 기록)
  */
 export function trackPlatformClick(platformId: string): void {
-  void incrementKey(`click_${platformId}`);
+  void incrementAllTimeBuckets(`click_${platformId}`);
 }
 
 /**
- * 기타 주요 버튼(인스타그램, 이메일 문의, 전체 북클릿 열기) 클릭 기록
+ * 기타 주요 버튼(인스타그램, 이메일 문의, 전체 북클릿 열기) 클릭 기록 (전체/일/월/년 동시 기록)
  */
 export function trackExtraClick(
   action: 'instagram' | 'contact' | 'booklet_modal'
 ): void {
-  void incrementKey(`click_${action}`);
+  void incrementAllTimeBuckets(`click_${action}`);
 }
 
 /**
- * 관리자 전용 전체 통계 데이터 일괄 조회
+ * 관리자 전용 기간별(전체 / 일별 / 월별 / 년별) 통계 조회
  */
-export async function fetchAllAnalytics(): Promise<AnalyticsSnapshot> {
+export async function fetchAnalyticsByPeriod(
+  period: AnalyticsPeriod,
+  periodKey: string
+): Promise<AnalyticsSnapshot> {
+  const prefix = getBucketPrefix(period, periodKey);
   const platformIds = STREAMING_PLATFORMS.map((p) => p.id);
 
   const [
@@ -203,12 +273,12 @@ export async function fetchAllAnalytics(): Promise<AnalyticsSnapshot> {
     bookletModalClicks,
     ...platformCounts
   ] = await Promise.all([
-    getKeyCount('total_views'),
-    getKeyCount('unique_visitors'),
-    getKeyCount('click_instagram'),
-    getKeyCount('click_contact'),
-    getKeyCount('click_booklet_modal'),
-    ...platformIds.map((id) => getKeyCount(`click_${id}`)),
+    getKeyCount(`${prefix}_total_views`),
+    getKeyCount(`${prefix}_unique_visitors`),
+    getKeyCount(`${prefix}_click_instagram`),
+    getKeyCount(`${prefix}_click_contact`),
+    getKeyCount(`${prefix}_click_booklet_modal`),
+    ...platformIds.map((id) => getKeyCount(`${prefix}_click_${id}`)),
   ]);
 
   const platformClicks: Record<string, number> = {};
@@ -217,6 +287,8 @@ export async function fetchAllAnalytics(): Promise<AnalyticsSnapshot> {
   });
 
   return {
+    period,
+    periodKey,
     totalViews,
     uniqueVisitors,
     platformClicks,
