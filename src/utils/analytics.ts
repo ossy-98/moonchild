@@ -103,6 +103,7 @@ async function sha256Hex(input: string): Promise<string> {
 
 /**
  * URL 쿼리스트링(?admin=비밀번호)이 아티스트 본인의 비밀번호와 일치하는지 확인
+ * - 주소창 정리는 모달이 실제로 열린 뒤 호출하도록 분리하여 React StrictMode 이중 마운트와 충돌하지 않게 처리
  */
 export async function checkAdminUrlAccess(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
@@ -111,13 +112,16 @@ export async function checkAdminUrlAccess(): Promise<boolean> {
   if (!candidate) return false;
 
   const hash = await sha256Hex(candidate.trim());
-  if (hash === ADMIN_PASSPHRASE_SHA256) {
-    // 주소창에서 비밀번호 파라미터를 깔끔하게 숨김 처리
+  return hash === ADMIN_PASSPHRASE_SHA256;
+}
+
+export function clearAdminQueryFromUrl(): void {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('admin')) {
     const cleanUrl = window.location.pathname + window.location.hash;
     window.history.replaceState({}, document.title, cleanUrl);
-    return true;
   }
-  return false;
 }
 
 /**

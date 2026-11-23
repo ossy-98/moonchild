@@ -15,6 +15,7 @@ import { ScrawlText } from './components/ScrawlText';
 import { AdminAnalyticsModal } from './components/AdminAnalyticsModal';
 import {
   checkAdminUrlAccess,
+  clearAdminQueryFromUrl,
   trackPageView,
   trackPlatformClick,
   trackExtraClick,
@@ -111,17 +112,28 @@ export const App: React.FC = () => {
 
   // 페이지 진입 시: ?admin=비밀번호 접속이면 비밀 통계창을 열고, 일반 방문자면 조회수 트래킹
   useEffect(() => {
-    if (didInitAnalyticsRef.current) return;
-    didInitAnalyticsRef.current = true;
+    let cancelled = false;
 
     void (async () => {
       const isAdmin = await checkAdminUrlAccess();
+      if (cancelled) return;
+
       if (isAdmin) {
         setIsAdminOpen(true);
-      } else {
+        // 모달이 열린 뒤 주소창에서 ?admin=... 제거
+        clearAdminQueryFromUrl();
+        return;
+      }
+
+      if (!didInitAnalyticsRef.current) {
+        didInitAnalyticsRef.current = true;
         await trackPageView();
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 이메일 버튼 클릭 시 사용 중인 맥북 '메일' 앱(또는 기본 메일 클라이언트)으로 즉시 이동
