@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowUpRight } from 'lucide-react';
 import {
@@ -12,6 +12,13 @@ import { CollageTitle } from './components/CollageTitle';
 import { BookletModal } from './components/BookletModal';
 import { ZoomImageModal } from './components/ZoomImageModal';
 import { ScrawlText } from './components/ScrawlText';
+import { AdminAnalyticsModal } from './components/AdminAnalyticsModal';
+import {
+  checkAdminUrlAccess,
+  trackPageView,
+  trackPlatformClick,
+  trackExtraClick,
+} from './utils/analytics';
 
 /**
  * 실제 인스타그램 공식 앱 아이콘 (iOS/macOS 풀컬러 스쿼클 그라데이션 아이콘)
@@ -95,13 +102,32 @@ export const App: React.FC = () => {
   const [activeIndex, setActiveIndex] = useState<number>(0);
   const [isBookletOpen, setIsBookletOpen] = useState<boolean>(false);
   const [zoomedBooklet, setZoomedBooklet] = useState<PlatformItem | null>(null);
+  const [isAdminOpen, setIsAdminOpen] = useState<boolean>(false);
+
+  const didInitAnalyticsRef = useRef<boolean>(false);
 
   const activePlatform =
     STREAMING_PLATFORMS[activeIndex] ?? STREAMING_PLATFORMS[0];
 
+  // 페이지 진입 시: ?admin=비밀번호 접속이면 비밀 통계창을 열고, 일반 방문자면 조회수 트래킹
+  useEffect(() => {
+    if (didInitAnalyticsRef.current) return;
+    didInitAnalyticsRef.current = true;
+
+    void (async () => {
+      const isAdmin = await checkAdminUrlAccess();
+      if (isAdmin) {
+        setIsAdminOpen(true);
+      } else {
+        await trackPageView();
+      }
+    })();
+  }, []);
+
   // 이메일 버튼 클릭 시 사용 중인 맥북 '메일' 앱(또는 기본 메일 클라이언트)으로 즉시 이동
   const handleEmailClick = useCallback(
     async (e: React.MouseEvent<HTMLAnchorElement>) => {
+      trackExtraClick('contact');
       const mailtoUrl = `mailto:${ARTIST_CONFIG.email}`;
 
       if (
@@ -156,13 +182,14 @@ export const App: React.FC = () => {
             <CollageTitle />
           </div>
 
-          {/* 우측: 삐뚤빼뚤한 매력이 살아있으면서도 선명한 손글씨 ('instagram →', 'contact →') + 아이콘 */}
+          {/* 우측: 정돈된 손글씨 ('instagram →', 'contact →') + 아이콘 */}
           <div className="flex flex-col items-end gap-1">
             {/* 인스타그램 행 */}
             <a
               href={ARTIST_CONFIG.instagramUrl}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={() => trackExtraClick('instagram')}
               aria-label={`Instagram ${ARTIST_CONFIG.instagramHandle}`}
               title={`Instagram (${ARTIST_CONFIG.instagramHandle})`}
               className="group flex items-center gap-2 transition-transform duration-200 hover:scale-105 active:scale-95"
@@ -208,17 +235,21 @@ export const App: React.FC = () => {
           activeIndex={activeIndex}
           onSelectIndex={setActiveIndex}
           onZoomBooklet={setZoomedBooklet}
-          onOpenAllBooklets={() => setIsBookletOpen(true)}
+          onOpenAllBooklets={() => {
+            trackExtraClick('booklet_modal');
+            setIsBookletOpen(true);
+          }}
         />
       </main>
 
       {/* 3. 자켓 하단 UI: 현재 중앙 자켓과 실시간 일치하는 캡슐 버튼 + 6개 미니 아이콘 인디케이터 */}
       <footer className="relative z-20 w-full max-w-xl mx-auto px-4 pb-4 sm:pb-7 pt-1 flex flex-col items-center gap-3 sm:gap-3.5 shrink-0">
-        {/* 중앙 자켓 매칭 플랫폼 캡슐(Pill) 버튼 (동일한 삐뚤빼뚤한 손글씨 적용) */}
+        {/* 중앙 자켓 매칭 플랫폼 캡슐(Pill) 버튼 (클릭 시 해당 북클릿/플랫폼 클릭 수 트래킹) */}
         <a
           href={activePlatform.url}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={() => trackPlatformClick(activePlatform.id)}
           className="group relative flex items-center justify-between gap-4 min-w-[244px] sm:min-w-[274px] pl-4 pr-3.5 py-2.5 sm:py-3 rounded-full bg-white/[0.08] hover:bg-white/[0.14] active:scale-[0.98] border border-white/20 backdrop-blur-2xl transition-all duration-150"
           style={{
             boxShadow: `0 10px 35px -5px ${activePlatform.glowColor}, inset 0 1px 0 0 rgba(255,255,255,0.22)`,
@@ -308,7 +339,7 @@ export const App: React.FC = () => {
         </nav>
       </footer>
 
-      {/* 메인 북클릿 사진 클릭 시 열리는 1단 확대 모달 (한 번 더 누르면 닫힘) */}
+      {/* 메인 북클릿 사진 클릭 시 열리는 1단 확대 모달 */}
       <ZoomImageModal
         item={zoomedBooklet}
         onClose={() => setZoomedBooklet(null)}
@@ -318,6 +349,12 @@ export const App: React.FC = () => {
       <BookletModal
         isOpen={isBookletOpen}
         onClose={() => setIsBookletOpen(false)}
+      />
+
+      {/* ?admin=980115Kra! 로 접속했을 때만 열리는 아티스트 전용 비공개 조회수 & 클릭 통계창 */}
+      <AdminAnalyticsModal
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
       />
     </div>
   );

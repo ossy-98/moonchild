@@ -608,12 +608,8 @@ export const CoverFlow3D: React.FC<CoverFlow3DProps> = ({
                   }}
                 />
 
-                {/* 자켓 좌측 상단 트랙 번호 & 플랫폼 미니 뱃지 */}
-                <div className="pointer-events-none absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono tracking-wider bg-black/65 text-white/85 border border-white/15">
-                    0{item.index}
-                  </span>
-
+                {/* 자켓 우측 상단 플랫폼 미니 뱃지 (좌측 상단 숫자 01, 02... 삭제됨) */}
+                <div className="pointer-events-none absolute top-2.5 right-2.5 flex items-center justify-end">
                   <span
                     className="w-6 h-6 rounded-full flex items-center justify-center bg-black/65 border border-white/20 text-white shadow-md"
                     style={{
